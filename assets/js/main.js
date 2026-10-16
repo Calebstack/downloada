@@ -30,53 +30,132 @@ if (menuToggle && navigation) {
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") closeMenu();
   });
+
+  window.addEventListener("resize", () => {
+    if (window.matchMedia("(min-width: 921px)").matches) closeMenu();
+  });
+}
+
+const sectionLinks = navigation
+  ? Array.from(navigation.querySelectorAll('a[href^="#"]'))
+      .map((link) => ({
+        link,
+        section: document.querySelector(link.getAttribute("href")),
+      }))
+      .filter(({ section }) => section instanceof HTMLElement)
+  : [];
+
+function updateActiveNavigation() {
+  const activationLine =
+    (document.querySelector(".site-header")?.getBoundingClientRect().height ?? 0) +
+    window.innerHeight * 0.28;
+  let activeLink = null;
+
+  sectionLinks.forEach(({ link, section }) => {
+    if (section.getBoundingClientRect().top <= activationLine) {
+      activeLink = link;
+    }
+  });
+
+  sectionLinks.forEach(({ link }) => {
+    if (link === activeLink) {
+      link.setAttribute("aria-current", "location");
+    } else {
+      link.removeAttribute("aria-current");
+    }
+  });
+}
+
+let navigationUpdateQueued = false;
+function queueNavigationUpdate() {
+  if (navigationUpdateQueued) return;
+  navigationUpdateQueued = true;
+  window.requestAnimationFrame(() => {
+    updateActiveNavigation();
+    navigationUpdateQueued = false;
+  });
+}
+
+if (sectionLinks.length > 0) {
+  updateActiveNavigation();
+  window.addEventListener("scroll", queueNavigationUpdate, { passive: true });
+  window.addEventListener("resize", queueNavigationUpdate);
 }
 
 const year = document.querySelector("#current-year");
 if (year) year.textContent = String(new Date().getFullYear());
 
+const revealElements = document.querySelectorAll("[data-reveal]");
+const prefersReducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+
+if ("IntersectionObserver" in window && !prefersReducedMotion.matches) {
+  document.documentElement.classList.add("motion-ready");
+  const revealObserver = new IntersectionObserver(
+    (entries, observer) => {
+      entries.forEach((entry) => {
+        if (!entry.isIntersecting) return;
+        entry.target.classList.add("is-visible");
+        observer.unobserve(entry.target);
+      });
+    },
+    { rootMargin: "0px 0px -48px 0px", threshold: 0.12 },
+  );
+
+  revealElements.forEach((element) => revealObserver.observe(element));
+}
+
 const requestForm = document.querySelector("#request-form");
 const feedback = document.querySelector("#form-feedback");
 
 if (requestForm instanceof HTMLFormElement && feedback instanceof HTMLElement) {
-  requestForm.addEventListener("submit", async (event) => {
+  requestForm.addEventListener("submit", (event) => {
     event.preventDefault();
     feedback.textContent = "";
 
     if (!requestForm.reportValidity()) return;
 
     const formData = new FormData(requestForm);
-    const fields = [
-      ["Name", formData.get("name")],
-      ["Contact", formData.get("contact")],
-      ["Download", formData.get("download")],
-      ["Approximate size", formData.get("size")],
-      ["File link", formData.get("link")],
-      ["Additional details", formData.get("notes")],
-    ];
-    const message = [
-      "Downloada download request",
-      "",
-      ...fields
-        .filter(([, value]) => typeof value === "string" && value.trim())
-        .map(([label, value]) => `${label}: ${value.trim()}`),
-    ].join("\n");
+    const getValue = (name) => {
+      const value = formData.get(name);
+      return typeof value === "string" ? value.trim() : "";
+    };
+    const name = getValue("name");
+    const contact = getValue("contact");
+    const download = getValue("download");
+    const size = getValue("size");
 
-    try {
-      if (navigator.share) {
-        await navigator.share({ title: "Downloada download request", text: message });
-        feedback.textContent = "Your message was shared using your device. Contact details can be connected here before launch.";
-        return;
-      }
-      if (!navigator.clipboard) {
-        throw new Error("Sharing and clipboard access are unavailable in this browser.");
-      }
-      await navigator.clipboard.writeText(message);
-      feedback.textContent = "Your request has been copied. Paste it into a message for Downloada.";
-    } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") return;
-      feedback.textContent = "We couldn’t prepare your request on this device. Please try again or contact us directly.";
-      console.error("Unable to prepare the download request.", error);
+    if (!name || !contact || !download || !size) {
+      feedback.textContent = "Please provide your name, contact details, download name and approximate file size.";
+      return;
     }
+
+    const link = getValue("link");
+    const notes = getValue("notes");
+    const message = [
+      `Hi, my name is ${name}, and the best way to reach me is through ${contact}.`,
+      "",
+      `I would like to get ${download}.`,
+      `Approximate file size: ${size}.`,
+      `File link: ${link || "Not provided"}`,
+      ...(notes ? [`Additional details: ${notes}`] : []),
+    ].join("\n");
+    const telegramUrl = `https://t.me/DownloadaNG?text=${encodeURIComponent(message)}`;
+    const telegramWindow = window.open(telegramUrl, "_blank");
+
+    if (telegramWindow) {
+      telegramWindow.opener = null;
+      feedback.textContent = "Your request is ready in Telegram. Review it and tap Send to submit.";
+      return;
+    }
+
+    feedback.replaceChildren(
+      document.createTextNode("Telegram was blocked from opening. "),
+    );
+    const telegramLink = document.createElement("a");
+    telegramLink.href = telegramUrl;
+    telegramLink.target = "_blank";
+    telegramLink.rel = "noopener noreferrer";
+    telegramLink.textContent = "Open your prepared request in Telegram";
+    feedback.append(telegramLink);
   });
 }
